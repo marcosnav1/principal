@@ -51,6 +51,8 @@
     "subtitle_color": null,                // cor da palavra ativa (padrão: destaque)
     "subtitle_position": null,             // 0..1 da altura (padrão 0.80 vertical / 0.87 horizontal)
     "subtitle_size": null,                 // fração da largura (ex. 0.054)
+    "subtitle_x": null,                    // centro horizontal da legenda 0..1 (ex. 0.725 = painel à direita)
+    "subtitle_width": null,                // largura máx. da legenda (fração da largura)
     "subtitle_max_words": null,            // por bloco (até 2 linhas); padrão 4 vertical / 7 horizontal
     "subtitle_max_chars": null,            // por bloco; padrão 26 / 44
     "progress_bar": true,
@@ -75,7 +77,7 @@
 | `images` | [str \| obj] | Uma ou mais imagens; várias = sequência com crossfade dentro da cena. Objeto: `{ "path", "motion", "focus", "fit", "look", "duration", "zoom" }` |
 | `motion` | str | `auto` (alterna), `zoom_in`, `zoom_out`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `static` |
 | `focus` | [x, y] | Ponto de interesse 0–1 (ex. rosto em `[0.5, 0.35]`): o zoom vai até ele e o corte o preserva |
-| `fit` | str | `cover` (preenche), `contain` (foto inteira + fundo desfocado), `auto` (decide pela proporção) |
+| `fit` | str | `cover` (preenche), `contain` (foto inteira + fundo desfocado), `card` (foto inteira em cartão arredondado com sombra, posicionável via `card_x`/`card_h` — ideal para fotos verticais em vídeo horizontal, liberando um painel lateral para legendas), `auto` (decide pela proporção) |
 | `look` | str | `none`, `warm`, `cool`, `vintage`, `bw`, `cinematic`, `vivid`, `matte` (padrão: `theme.look`) |
 | `zoom` | float | Intensidade do movimento (1.0 padrão; 0.5 sutil; 1.5 forte) |
 | `shade` | str | Escurecimento p/ leitura: `bottom`, `top`, `both`, `full`, `none` |
@@ -83,7 +85,7 @@
 | `audio` | path | Narração GRAVADA ou gerada fora (ex. ElevenLabs) para a cena; extensão opcional (`narracao/01` acha 01.mp3/.wav). Legenda sincronizada pelas pausas reais do áudio |
 | `subtitle_position` | float | Altura da legenda só nesta cena (desviar de objetos importantes) |
 | `lock_duration` | bool | Com `target_duration`, esta cena não recebe folga (ex. reação final de 0,5 s) |
-| `lower_third.y` | float | Altura da tarja (ex. 0.055 = canto superior) |
+| `lower_third.y` / `.x` | float | Posição da tarja (ex. y 0.055 = canto superior; x 0.545 = painel direito) |
 
 Texto comum (`title`, `text`, `kicker`, `quote`...) também funciona sobre as imagens;
 use `text_position: "top"` quando o assunto da foto estiver no centro/baixo.

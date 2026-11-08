@@ -586,7 +586,7 @@ class PhotoShot:
     HEAD = 1.22  # folga de resolução para o zoom não perder nitidez
 
     def __init__(self, W, H, path, motion="auto", focus=(0.5, 0.45), fit="auto", look=None, idx=0,
-                 strength=1.0):
+                 strength=1.0, card_x=0.5, card_h=0.86, card_radius=0.022, bg_dim=0.5):
         self.W, self.H = W, H
         SW, SH = int(W * self.HEAD), int(H * self.HEAD)
         img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
@@ -607,6 +607,31 @@ class PhotoShot:
             src.alpha_composite(sh.filter(ImageFilter.GaussianBlur(30)))
             src.alpha_composite(fg.convert("RGBA"), (ox, oy))
             self.focus = (0.5 + (fx - 0.5) * fg.width / SW, 0.5 + (fy - 0.5) * fg.height / SH)
+        elif fit == "card":
+            # foto inteira em cartão (cantos arredondados + sombra) sobre fundo desfocado da própria imagem;
+            # card_x posiciona o cartão (0..1) e libera espaço lateral para texto/legendas
+            bg = ImageOps.fit(img, (SW, SH), Image.LANCZOS, centering=(fx, fy))
+            bg = bg.filter(ImageFilter.GaussianBlur(SW * 0.03))
+            bg = Image.blend(bg, Image.new("RGB", bg.size, (12, 9, 6)), bg_dim)
+            fg = ImageOps.contain(img, (int(SW * 0.9), int(SH * card_h)), Image.LANCZOS)
+            r = int(min(SW, SH) * card_radius)
+            mask = Image.new("L", fg.size, 0)
+            ImageDraw.Draw(mask).rounded_rectangle((0, 0, fg.width - 1, fg.height - 1), radius=r, fill=255)
+            src = bg.convert("RGBA")
+            ox = int(clamp(card_x * SW - fg.width / 2, 0, SW - fg.width))
+            oy = (SH - fg.height) // 2
+            sh = Image.new("RGBA", src.size, (0, 0, 0, 0))
+            off = int(SH * 0.018)
+            ImageDraw.Draw(sh).rounded_rectangle((ox, oy + off, ox + fg.width, oy + fg.height + off), radius=r,
+                                                 fill=(0, 0, 0, 170))
+            src.alpha_composite(sh.filter(ImageFilter.GaussianBlur(SH * 0.025)))
+            card = fg.convert("RGBA")
+            card.putalpha(mask)
+            src.alpha_composite(card, (ox, oy))
+            # contorno sutil
+            ImageDraw.Draw(src).rounded_rectangle((ox, oy, ox + fg.width - 1, oy + fg.height - 1), radius=r,
+                                                  outline=(255, 255, 255, 38), width=max(1, SH // 600))
+            self.focus = ((ox + fx * fg.width) / SW, (oy + fy * fg.height) / SH)
         else:
             src = ImageOps.fit(img, (SW, SH), Image.LANCZOS, centering=(fx, fy)).convert("RGBA")
             self.focus = (fx, fy)
@@ -665,7 +690,8 @@ class PhotoBackground:
         for i, s in enumerate(norm):
             d = s.get("duration") or rest
             shot = PhotoShot(W, H, s["path"], s.get("motion", "auto"), tuple(s.get("focus", (0.5, 0.45))),
-                             s.get("fit", fit), s.get("look", look), idx=i + seed, strength=s.get("zoom", strength))
+                             s.get("fit", fit), s.get("look", look), idx=i + seed, strength=s.get("zoom", strength),
+                             card_x=s.get("card_x", 0.5), card_h=s.get("card_h", 0.86))
             self.shots.append((t, d, shot))
             t += d
         ov = _shade_overlay(W, H, shade) if shade and shade != "none" else Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -727,14 +753,16 @@ class LowerThirdEl(Element):
 
 # ------------------------------------------------------------------ legendas
 class Subtitles:
-    def __init__(self, W, H, font_path, accent, style="karaoke", position=None, size=None, color="#ffffff"):
+    def __init__(self, W, H, font_path, accent, style="karaoke", position=None, size=None, color="#ffffff",
+                 x=None, width=None):
         self.W, self.H = W, H
         vertical = H > W
         self.size = int(size or (W * 0.066 if vertical else H * 0.058))
         self.fnt = font(font_path, self.size)
         self.accent, self.color, self.style = accent, color, style
         self.y_center = H * (position if position is not None else (0.80 if vertical else 0.87))
-        self.max_w = W * (0.84 if vertical else 0.75)
+        self.max_w = W * (width or (0.84 if vertical else 0.75))
+        self.x_center = W * (x if x is not None else 0.5)
         self.chunks = []  # (start, end, [(word, s, e)])
         self._cache = {}
 
@@ -775,5 +803,5 @@ class Subtitles:
                 img = self._render(ci, active)
                 p = (T - s) / 0.12
                 a, _, dy, sc = anim_state("pop", p)
-                paste(canvas, img, (self.W - img.width) / 2, yc - img.height / 2 + dy, a, 0.92 + 0.08 * sc)
+                paste(canvas, img, self.x_center - img.width / 2, yc - img.height / 2 + dy, a, 0.92 + 0.08 * sc)
                 return

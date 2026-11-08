@@ -359,7 +359,7 @@ def build_scene(sc, idx, theme, W, H, subs_on, base_dir):
             e.appear, e.end = float(lt.get("at", 0.6)), sc["_dur"] - 0.5
             ly = H * float(lt["y"]) if "y" in lt else \
                 H * ((0.62 if vertical else 0.64) if subs_on else (0.78 if vertical else 0.8))
-            items.append((e, (W * 0.06, ly)))
+            items.append((e, (W * float(lt.get("x", 0.06)), ly)))
     else:
         s.bg = V.Background(bg_kind, W, H, pal + ([sc["colors"][2]] if sc.get("colors") and len(sc["colors"]) > 2 else []),
                             accent, image=image, seed=idx * 7 + 3, motion=sc.get("image_motion", "zoom_in"),
@@ -495,7 +495,8 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
         subs = V.Subtitles(W, H, V.find_font(theme["font"], "black"), theme.get("subtitle_color") or
                            theme.get("accent") or theme["palette"][-1], style=subs_style,
                            position=theme.get("subtitle_position"),
-                           size=(theme["subtitle_size"] * W) if theme.get("subtitle_size") else None)
+                           size=(theme["subtitle_size"] * W) if theme.get("subtitle_size") else None,
+                           x=theme.get("subtitle_x"), width=theme.get("subtitle_width"))
     vertical = H > W
     for sc in scenes:
         if not sc["_words"]:
