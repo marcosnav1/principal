@@ -1,0 +1,61 @@
+{
+  "title": "3 hábitos para dobrar sua produtividade",
+  "format": "9:16",
+  "voice": { "engine": "auto", "voice": "pt-BR-AntonioNeural", "rate": "+5%" },
+  "music": { "mood": "upbeat", "volume": 0.2 },
+  "theme": {
+    "palette": ["#0b1020", "#3b1d6e", "#facc15"],
+    "font": "Inter",
+    "background": "particles",
+    "transition": "slide",
+    "subtitle_style": "karaoke",
+    "handle": "@seucanal"
+  },
+  "scenes": [
+    {
+      "type": "title",
+      "kicker": "Produtividade",
+      "title": "3 hábitos que **dobram** sua produtividade",
+      "narration": "Três hábitos simples que podem dobrar a sua produtividade. O terceiro quase ninguém faz."
+    },
+    {
+      "kicker": "Hábito 1",
+      "title": "Planeje o dia **na véspera**",
+      "text": "Cinco minutos à noite economizam uma hora de manhã.",
+      "background": "waves",
+      "narration": "Primeiro: planeje o dia na véspera. Cinco minutos à noite economizam uma hora inteira de manhã."
+    },
+    {
+      "kicker": "Hábito 2",
+      "title": "Blocos de foco",
+      "bullets": ["50 minutos sem notificações", "10 minutos de pausa real", "Repita 3 vezes"],
+      "bullet_style": "number",
+      "narration": "Segundo: trabalhe em blocos de foco. Cinquenta minutos sem notificações, dez de pausa de verdade, e repita três vezes."
+    },
+    {
+      "stat": { "value": 23, "suffix": " min" },
+      "title": "para recuperar o foco após **uma** interrupção",
+      "background": "grid",
+      "narration": "Sabia que você leva cerca de vinte e três minutos para recuperar o foco depois de uma única interrupção?"
+    },
+    {
+      "kicker": "Hábito 3",
+      "image": "assets/exemplo.jpg",
+      "title": "Diga **não** mais vezes",
+      "narration": "E o terceiro: diga não mais vezes. Cada sim para o que não importa é um não para o que importa."
+    },
+    {
+      "quote": "Foco é dizer **não** a cem boas ideias.",
+      "author": "Steve Jobs",
+      "background": "bokeh",
+      "narration": "Como dizia Steve Jobs: foco é dizer não a cem boas ideias."
+    },
+    {
+      "type": "cta",
+      "title": "Qual hábito você vai testar **hoje**?",
+      "button": "Siga para mais dicas",
+      "transition": "zoom",
+      "narration": "Qual desses hábitos você vai testar hoje? Comenta aqui e me segue para mais dicas."
+    }
+  ]
+}

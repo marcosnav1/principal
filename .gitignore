@@ -1,0 +1,4 @@
+out/
+.tts_cache/
+*_work/
+__pycache__/

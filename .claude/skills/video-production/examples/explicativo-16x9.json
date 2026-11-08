@@ -1,0 +1,26 @@
+{
+  "title": "Como funciona a energia solar",
+  "format": "16:9",
+  "voice": { "voice": "pt-BR-FranciscaNeural", "rate": "+0%" },
+  "music": { "mood": "calm", "volume": 0.16 },
+  "theme": {
+    "palette": ["#06281f", "#0e5a43", "#fbbf24"],
+    "background": "auto",
+    "transition": "fade",
+    "subtitle_style": "box",
+    "progress_bar": true
+  },
+  "scenes": [
+    { "type": "title", "kicker": "Explicando", "title": "Como funciona a **energia solar**?",
+      "narration": "Você já se perguntou como um painel transforma luz do sol em eletricidade?" },
+    { "title": "O efeito fotovoltaico", "text": "A luz **libera elétrons** no silício e cria corrente elétrica.",
+      "narration": "Tudo começa no efeito fotovoltaico. Quando a luz atinge as células de silício, ela libera elétrons, e esse movimento gera corrente elétrica." },
+    { "title": "Do painel até a tomada", "bullets": ["Painéis geram corrente contínua", "Inversor converte para alternada", "Energia abastece a casa", "Excedente vai para a rede"],
+      "narration": "Os painéis geram corrente contínua. O inversor converte para corrente alternada, que abastece a casa. E o que sobra vai para a rede elétrica." },
+    { "stat": { "value": 95, "suffix": "%" }, "title": "de economia na conta de luz",
+      "narration": "Em muitos casos, a economia na conta de luz chega a noventa e cinco por cento.",
+      "sfx": [{ "name": "coin", "at": 1.6 }] },
+    { "type": "cta", "title": "Quer saber se compensa **para você**?", "button": "Faça uma simulação grátis",
+      "narration": "Quer saber se compensa para você? Faça uma simulação gratuita." }
+  ]
+}
