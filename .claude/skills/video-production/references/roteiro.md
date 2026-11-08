@@ -70,6 +70,8 @@ kicker → image(card) → stat → title → text → quote/author → bullets 
 | `image` | path | Imagem (relativa ao JSON). |
 | `image_mode` | str | `background` (Ken Burns + escurecimento) ou `card` (cartão flutuante). |
 | `image_motion` | str | `zoom_in`, `zoom_out`, `pan`. |
+| `text_position` | str | `top`, `center`, `low`, `bottom` (sobre fotos, `top` escurece o céu/topo). |
+| `card_height` | float | Altura máx. do cartão de imagem (fração da área, padrão 0.45). |
 | `background` | str | Fundo desta cena. |
 | `colors` | [hex] | Gradiente desta cena (2–3 cores). |
 | `accent`, `text_color` | hex | Cores desta cena. |

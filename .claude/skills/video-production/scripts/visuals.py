@@ -453,7 +453,7 @@ def soft_dot(r, color):
 
 
 class Background:
-    def __init__(self, kind, W, H, colors, accent, image=None, seed=0, motion="zoom_in"):
+    def __init__(self, kind, W, H, colors, accent, image=None, seed=0, motion="zoom_in", shade_top=False):
         self.kind, self.W, self.H = kind, W, H
         self.colors, self.accent = colors, accent
         self.rng = random.Random(seed)
@@ -465,7 +465,10 @@ class Background:
             self.motion = motion
             ov = np.zeros((H, W, 4), np.uint8)
             ramp = np.linspace(0, 1, H)[:, None]
-            ov[..., 3] = (np.clip(0.25 + 0.55 * ramp ** 1.5, 0, 1) * 255).astype(np.uint8)
+            shade = 0.25 + 0.55 * ramp ** 1.5
+            if shade_top:  # escurece o topo quando o texto fica em cima
+                shade = np.maximum(shade, 0.62 * np.clip(1 - ramp / 0.42, 0, 1) ** 1.3)
+            ov[..., 3] = (np.clip(shade, 0, 1) * 255).astype(np.uint8)
             self.overlay = Image.fromarray(ov, "RGBA")
         elif kind == "radial" or kind == "spotlight":
             self.base = radial(W + self.pan, H + self.pan, colors[-1], colors[0])

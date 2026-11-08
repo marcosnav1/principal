@@ -139,7 +139,7 @@ def build_scene(sc, idx, theme, W, H, subs_on, base_dir):
             e.appear = t; t += 0.2
             els.append(e)
         if image and img_mode == "card":
-            e = V.ImageCardEl(image, cw, area * 0.45 * f, radius=int(u * 0.035))
+            e = V.ImageCardEl(image, cw, area * float(sc.get("card_height", 0.45)) * f, radius=int(u * 0.035))
             e.appear = t; t += 0.3
             els.append(e)
         if sc.get("stat") is not None:
@@ -194,9 +194,10 @@ def build_scene(sc, idx, theme, W, H, subs_on, base_dir):
         if total <= area:
             break
         f *= 0.88
-    y = top + (area - total) / 2
-    if bg_kind == "image" and not any(isinstance(e, V.ImageCardEl) for e in els):
-        y = top + (area - total) * 0.85  # texto mais embaixo sobre fotos
+    tpos = sc.get("text_position")
+    if tpos is None and bg_kind == "image" and not any(isinstance(e, V.ImageCardEl) for e in els):
+        tpos = "low"  # texto mais embaixo sobre fotos
+    y = top + (area - total) * {"top": 0.0, "low": 0.85, "bottom": 1.0}.get(tpos, 0.5)
     pos = []
     for e in els:
         e.cw = cw
@@ -204,7 +205,8 @@ def build_scene(sc, idx, theme, W, H, subs_on, base_dir):
         y += e.height + gap
     s = Scene()
     s.bg = V.Background(bg_kind, W, H, pal + ([sc["colors"][2]] if sc.get("colors") and len(sc["colors"]) > 2 else []),
-                        accent, image=image, seed=idx * 7 + 3, motion=sc.get("image_motion", "zoom_in"))
+                        accent, image=image, seed=idx * 7 + 3, motion=sc.get("image_motion", "zoom_in"),
+                        shade_top=tpos == "top")
     s.items = list(zip(els, pos))
     s.accent = accent
     return s
