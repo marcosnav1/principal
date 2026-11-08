@@ -13,6 +13,7 @@ loudness -14 LUFS) + .srt + thumbnail.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import math
 import os
@@ -22,7 +23,7 @@ import sys
 import time
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -85,23 +86,122 @@ def estimate_words(text, dur):
     return out
 
 
+def align_to_audio(text, wav):
+    """Tempos das palavras a partir das pausas REAIS do áudio (sem modelo de transcrição).
+
+    Divide o texto em frases na pontuação; se o número de frases bate com o de trechos de fala
+    detectados, cada frase ocupa seu trecho; senão distribui pelo tempo com voz, pulando silêncios."""
+    toks = text.split()
+    y = A.load_audio(wav)
+    spans = A.speech_spans(y)
+    if not toks or not spans:
+        return estimate_words(text, len(y) / A.SR)
+    wt = [len(re.sub(r"\W", "", w)) + 1 for w in toks]
+    phrases, cur = [], []
+    for i, w in enumerate(toks):
+        cur.append(i)
+        if re.search(r"[,.;:!?…]$", w) or i == len(toks) - 1:
+            phrases.append(cur)
+            cur = []
+    out = [None] * len(toks)
+
+    def fill(idx, a, b):
+        tot = sum(wt[i] for i in idx)
+        acc = 0.0
+        for i in idx:
+            s0 = a + (b - a) * acc / tot
+            acc += wt[i]
+            out[i] = (toks[i], s0, a + (b - a) * acc / tot)
+
+    def plausible():  # proporção de texto de cada frase deve parecer com a duração do trecho
+        tw = sum(wt)
+        tot = sum(b - a for a, b in spans)
+        for idx, (a, b) in zip(phrases, spans):
+            r = (sum(wt[i] for i in idx) / tw) / ((b - a) / tot)
+            if not 0.55 < r < 1.8:
+                return False
+        return True
+
+    if len(phrases) == len(spans) and plausible():
+        for idx, (a, b) in zip(phrases, spans):
+            fill(idx, a, b)
+        return out
+    total = sum(b - a for a, b in spans)
+
+    def v2t(v):
+        for a, b in spans:
+            if v <= b - a:
+                return a + v
+            v -= b - a
+        return spans[-1][1]
+
+    W = sum(wt)
+    acc = 0.0
+    for i, w in enumerate(toks):
+        a = acc / W * total
+        acc += wt[i]
+        out[i] = (w, v2t(a), v2t(acc / W * total - 1e-6))
+    return out
+
+
 def clean_word(w):
     w = w.strip()
-    return re.sub(r"[,.;:]+$", "", w) or w
+    return re.sub(r"[,;:]+$", "", w) or w
+
+
+WEAK_WORDS = {"o", "a", "os", "as", "e", "de", "do", "da", "dos", "das", "se", "um", "uma", "que", "no", "na",
+              "em", "por", "para", "com", "aquela", "aquele", "esse", "essa", "ao", "à", "mas", "eu", "ele", "ela",
+              "the", "of", "and", "to", "in"}
 
 
 def chunk_words(words, max_words, max_chars):
-    chunks, cur = [], []
+    """Blocos de legenda: respeita frases, equilibra o tamanho e evita palavra órfã.
+
+    max_chars é o total do bloco (até 2 linhas). Pontuação interna é mantida; vírgula/dois-pontos
+    no fim do bloco são removidos."""
+    if not words:
+        return []
+    # 1) frases: quebra em .!?… e em pausas reais; vírgula vira ponto de quebra preferencial
+    phrases, cur = [], []
     for i, (w, s, e) in enumerate(words):
-        cur.append((clean_word(w), s, e))
+        cur.append((w, s, e))
         nxt = words[i + 1] if i + 1 < len(words) else None
-        chars = sum(len(x[0]) + 1 for x in cur)
-        brk = (nxt is None or len(cur) >= max_words or chars + len(nxt[0]) > max_chars
-               or nxt[1] - e > 0.22 or w.rstrip()[-1:] in ".!?,;:")
-        if brk:
-            chunks.append(cur)
+        if nxt is None or re.search(r"[.!?…]$", w) or nxt[1] - e > 0.35:
+            phrases.append(cur)
             cur = []
-    return chunks
+
+    def length(ws):
+        return sum(len(x[0]) + 1 for x in ws) - 1
+
+    def split(ws):  # divide em partes equilibradas, preferindo vírgulas
+        if length(ws) <= max_chars and len(ws) <= max_words:
+            return [ws]
+        n = len(ws)
+        best, best_cost = None, None
+        for k in range(1, n):
+            a, b = ws[:k], ws[k:]
+            cost = abs(length(a) - length(b)) - (22 if re.search(r"[,;:]$", ws[k - 1][0]) else 0)
+            if ws[k - 1][0].lower().strip(",.") in WEAK_WORDS:
+                cost += 18  # não termina linha em artigo/preposição/conjunção
+            if min(len(a), len(b)) < 2:
+                cost += 40  # evita órfã
+            if best_cost is None or cost < best_cost:
+                best, best_cost = k, cost
+        return split(ws[:best]) + split(ws[best:])
+
+    chunks = []
+    for ph in phrases:
+        chunks += split(ph)
+    # 2) junta blocos muito curtos com o vizinho quando couber
+    merged = []
+    for ch in chunks:
+        if merged and (length(ch) < 10 or length(merged[-1]) < 10) and \
+                length(merged[-1]) + length(ch) + 1 <= max_chars and len(merged[-1]) + len(ch) <= max_words \
+                and ch[0][1] - merged[-1][-1][2] < 0.35:
+            merged[-1] = merged[-1] + ch
+        else:
+            merged.append(ch)
+    return [[(w if i < len(ch) - 1 else clean_word(w), s, e) for i, (w, s, e) in enumerate(ch)] for ch in merged]
 
 
 def srt_time(t):
@@ -257,7 +357,8 @@ def build_scene(sc, idx, theme, W, H, subs_on, base_dir):
             e = V.LowerThirdEl(lt.get("title", ""), lt.get("subtitle"), fb, freg, u, accent,
                                max_w=W * 0.8)
             e.appear, e.end = float(lt.get("at", 0.6)), sc["_dur"] - 0.5
-            ly = H * ((0.62 if vertical else 0.64) if subs_on else (0.78 if vertical else 0.8))
+            ly = H * float(lt["y"]) if "y" in lt else \
+                H * ((0.62 if vertical else 0.64) if subs_on else (0.78 if vertical else 0.8))
             items.append((e, (W * 0.06, ly)))
     else:
         s.bg = V.Background(bg_kind, W, H, pal + ([sc["colors"][2]] if sc.get("colors") and len(sc["colors"]) > 2 else []),
@@ -332,8 +433,13 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
         nar = texts[i]
         sc["_wav"], sc["_voice_dur"], sc["_words"] = None, 0.0, None
         rec = sc.get("audio") or sc.get("narration_file")
-        if rec:  # narração gravada pelo usuário
+        if rec:  # narração gravada pelo usuário (extensão opcional: narracao/01 acha 01.mp3/01.wav...)
             rec = rec if os.path.isabs(rec) else os.path.join(base_dir, rec)
+            if not os.path.isfile(rec):
+                cands = sorted(p for p in glob.glob(rec + ".*") if p.lower().endswith(A.AUDIO_EXT))
+                if not cands:
+                    raise FileNotFoundError(f"cena {i + 1}: narração não encontrada: {rec}(.mp3/.wav)")
+                rec = cands[0]
             wav, d, words, eng = T.recorded(rec, cache, vcfg.get("recording_polish", "gravacao"),
                                             T.lang_of(vcfg.get("voice") or ""))
         elif nar:
@@ -345,24 +451,38 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
             continue
         used.add(eng)
         sc["_wav"], sc["_voice_dur"] = wav, d
-        sc["_words"] = words if words else (estimate_words(nar, d) if nar else None)
+        sc["_words"] = words if words else (align_to_audio(nar, wav) if nar else None)
         log(f"  cena {i + 1}: {d:.1f}s [{eng}]")
     if "espeak" in used:
         log("  ⚠ usando espeak (voz robótica). Configure ELEVENLABS_API_KEY ou OPENAI_API_KEY no .env, "
             "ou rode com internet (edge-tts).")
 
     # 2) linha do tempo
-    t0 = 0.0
     for i, sc in enumerate(scenes):
         lead = sc.get("voice_delay", 0.45 if i == 0 else 0.3)
         tail = sc.get("pause", 0.55)
         need = lead + sc["_voice_dur"] + tail if sc["_wav"] else 0
         if sc.get("bullets") and not sc["_wav"]:
             need = 1.0 + 0.7 * len(sc["bullets"])
-        sc["_start"], sc["_voice_start"] = t0, lead if sc["_wav"] else 0.0
+        sc["_voice_start"] = lead if sc["_wav"] else 0.0
         sc["_dur"] = max(float(sc.get("duration", 0) or 0), need, 1.5 if sc["_wav"] else 3.0)
+    end_pad = float(sb.get("end_pad", 0.4))
+    target = sb.get("target_duration")
+    if target:  # redistribui folga entre as cenas para fechar a duração exata, sem mexer na fala
+        slack = float(target) - end_pad - sum(sc["_dur"] for sc in scenes)
+        flex = [sc for sc in scenes if not sc.get("lock_duration")]
+        if slack < -1e-6:
+            log(f"  ⚠ falas somam {-slack:.1f}s acima do alvo de {target}s: enxugue palavras ou reduza pausas "
+                "(a voz nunca é acelerada)")
+        elif flex:
+            for sc in flex:
+                sc["_dur"] += slack / len(flex)
+            log(f"  folga de {slack:.1f}s distribuída em {len(flex)} cenas (+{slack / len(flex):.2f}s cada)")
+    t0 = 0.0
+    for sc in scenes:
+        sc["_start"] = t0
         t0 += sc["_dur"]
-    total = t0 + float(sb.get("end_pad", 0.4))
+    total = t0 + end_pad
     log(f"▶ Duração total: {total:.1f}s em {len(scenes)} cenas")
 
     # 3) cenas visuais
@@ -374,25 +494,29 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
     if subs_on:
         subs = V.Subtitles(W, H, V.find_font(theme["font"], "black"), theme.get("subtitle_color") or
                            theme.get("accent") or theme["palette"][-1], style=subs_style,
-                           position=theme.get("subtitle_position"))
+                           position=theme.get("subtitle_position"),
+                           size=(theme["subtitle_size"] * W) if theme.get("subtitle_size") else None)
     vertical = H > W
     for sc in scenes:
         if not sc["_words"]:
             continue
         off = sc["_start"] + sc["_voice_start"]
-        chunks = chunk_words(sc["_words"], 4 if vertical else 7, 26 if vertical else 44)
-        glob = []
+        chunks = chunk_words(sc["_words"], int(theme.get("subtitle_max_words") or (4 if vertical else 7)),
+                             int(theme.get("subtitle_max_chars") or (26 if vertical else 44)))
+        gchunks = []
         for ch in chunks:
-            glob.append([(w, s + off, e + off) for w, s, e in ch])
-        for k, ch in enumerate(glob):
+            gchunks.append([(w, s + off, e + off) for w, s, e in ch])
+        for k, ch in enumerate(gchunks):
             s = ch[0][1]
             e = ch[-1][2] + 0.25
-            if k + 1 < len(glob):
-                e = min(e, glob[k + 1][0][1])
+            if k + 1 < len(gchunks):
+                e = min(e, gchunks[k + 1][0][1])
             e = max(e, s + 0.4)
+            if k + 1 < len(gchunks):
+                e = min(e, gchunks[k + 1][0][1])  # nunca sobrepõe o bloco seguinte
             srt.append((s, e, " ".join(w for w, _, _ in ch)))
             if subs:
-                subs.add_chunks([(s, e, ch)])
+                subs.add_chunks([(s, e, ch, sc.get("subtitle_position"))])
 
     def overlays(frame, T_):
         if theme.get("progress_bar"):
@@ -461,7 +585,15 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
         music = np.zeros((n, 2))
     else:
         log(f"  trilha: sintetizada ({mcfg['mood']}) — para som profissional coloque mp3 em {os.path.relpath(lib, base_dir)}/")
-        music = A.to_stereo(A.synth_music(total, mcfg["mood"], mcfg.get("bpm"), seed=int(mcfg.get("seed", len(scenes)))), 12)
+        if str(mcfg["mood"]).lower() in ("violao", "violão", "acoustic", "acustico", "acolhedor"):
+            music = A.synth_violao(total, mcfg.get("bpm") or 96, seed=int(mcfg.get("seed", 0)))
+        else:
+            music = A.to_stereo(A.synth_music(total, mcfg["mood"], mcfg.get("bpm"),
+                                              seed=int(mcfg.get("seed", len(scenes)))), 12)
+    if mcfg.get("delay_scene"):  # trilha entra em uma cena específica (ex.: 2)
+        k = int(mcfg["delay_scene"]) - 1
+        d = max(0, int((scenes[k]["_start"] - float(mcfg.get("delay_lead", 0.3))) * A.SR))
+        music = np.concatenate([np.zeros((d, music.shape[1])), music])[:len(music)]
     sfx_dirs = [d for d in (os.path.join(base_dir, sb.get("sfx_library", "sfx")),) if os.path.isdir(d)]
 
     def S(name):
@@ -537,6 +669,9 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
         rc = proc.wait()
     if rc != 0:
         raise RuntimeError("ffmpeg falhou ao codificar o vídeo")
+    if sb.get("thumbnail"):
+        tp = sb["thumbnail"] if os.path.isabs(sb["thumbnail"]) else os.path.join(base_dir, sb["thumbnail"])
+        thumb = ImageOps.fit(Image.open(tp).convert("RGB"), V.FORMATS[fmt], Image.LANCZOS)
     if thumb is not None:
         thumb.save(os.path.splitext(out_path)[0] + "_thumb.jpg", quality=92)
     log(f"✔ {out_path}  ({total:.1f}s, {os.path.getsize(out_path) / 1e6:.1f} MB, "

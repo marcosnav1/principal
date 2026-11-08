@@ -31,6 +31,14 @@ Intercale: abertura animada → 2–3 cenas ilustradas → cena animada com a id
 Antes de escrever a narração de uma cena ilustrada, OLHE a imagem (Read) e descreva o que ela mostra;
 defina `focus` no rosto/assunto principal.
 
+## Projetos com várias vozes / falas prontas
+
+Para personagens (uma voz por fala), gere cada fala separadamente — p.ex. pelo conector ElevenLabs
+(`creative_generate_speech`, baixando o mp3 de `elevenlabsusercontent.com`) — salve em
+`narracao/NN.mp3` e use `"audio": "narracao/NN"` em cada cena. Com `"target_duration"` o render
+mede as falas e fecha a duração exata sem acelerar voz; se não couber, ele avisa quanto sobra para
+enxugar o texto. Nunca entregue voz espeak como final.
+
 ## Fluxo de trabalho
 
 1. **Entender o pedido** – objetivo, público, plataforma (define o formato), duração

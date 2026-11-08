@@ -320,6 +320,110 @@ def synth_music(duration: float, mood: str = "upbeat", bpm: float | None = None,
     return fade(mix * 0.9, 1.0, min(3.0, duration / 4))
 
 
+# ------------------------------------------------------------------ violão (Karplus-Strong) + percussão leve
+def guitar_note(f, dur=2.2, bright=0.5, seed=0):
+    """Corda dedilhada por Karplus-Strong vetorizado (timbre de violão de nylon)."""
+    n = int(dur * SR)
+    N = max(2, int(SR / f))
+    rng = np.random.default_rng(seed)
+    exc = rng.uniform(-1, 1, N)
+    exc = lowpass(np.concatenate([exc, np.zeros(N * 3)]), 1500 + 3500 * bright)[:N]  # palhetada macia
+    exc -= exc.mean()  # sem componente DC
+    out = np.empty(n + N)
+    out[:N] = exc
+    decay = 0.996 - 0.0006 * (f / 440)
+    i = N
+    while i < n + N:
+        prev = out[i - N:i]
+        blk = decay * 0.5 * (prev + np.concatenate([[prev[-1]], prev[:-1]]))
+        k = min(N, n + N - i)
+        out[i:i + k] = blk[:k]
+        i += k
+    y = highpass(out[N:N + n], 45)
+    body = lowpass(y, 2800) * 0.7 + y * 0.3  # caixa de ressonância
+    return fade(body * np.minimum(1, np.arange(n) / (0.002 * SR)), 0, 0.08)
+
+
+def synth_violao(duration: float, bpm: float = 96, seed: int = 0) -> np.ndarray:
+    """Violão dedilhado (I-vi-ii-V com sétimas) + shaker e cajón suaves. Estéreo, sem voz."""
+    rng = np.random.default_rng(seed)
+    beat = 60 / bpm
+    bar = beat * 4
+    key = 52 + int(rng.integers(0, 4))  # E3..G3
+    prog = [[0, 4, 7, 11], [-3, 0, 4, 7], [2, 5, 9, 12], [-5, -1, 2, 5]]  # Imaj7 vi7 ii7 V7
+    pattern = [(0, 0), (0.5, 2), (1, 3), (1.5, 2), (2, 1), (2.5, 2), (3, 3), (3.5, 2)]  # (tempo, voz)
+    n_bars = int(math.ceil(duration / bar)) + 1
+    L = np.zeros(int((n_bars * bar + 3) * SR))
+    R = np.zeros_like(L)
+    perc = np.zeros_like(L)
+    cache = {}
+
+    def note(m, d):
+        k = (round(m), round(d, 2))
+        if k not in cache:
+            cache[k] = guitar_note(mfreq(m), d, seed=len(cache))
+        return cache[k]
+
+    shaker_t = _t(0.07)
+    shaker = highpass(RNG.normal(0, 1, len(shaker_t)), 5000) * np.sin(np.pi * shaker_t / 0.07) ** 2 * 0.25
+    cajon_low = tom(0.8, base=58)[:int(0.4 * SR)]
+    cajon_slap = snare(0.6)
+    for b in range(n_bars):
+        ch = prog[b % 4]
+        t0 = b * bar
+        bass_m = key - 12 + ch[0]
+        add_at(L, note(bass_m, bar), t0, 0.55)
+        add_at(R, note(bass_m, bar), t0 + 0.004, 0.45)
+        for (pt, v) in pattern[1:]:
+            m = key + ch[1 + (v - 1) % 3] + (12 if v == 3 else 0)
+            humanize = float(rng.normal(0, 0.008))
+            g = 0.32 if pt % 1 == 0 else 0.24
+            pan = 0.3 + 0.4 * (v / 3)
+            add_at(L, note(m, beat * 2.5), t0 + pt * beat + humanize, g * (1 - pan) * 1.6)
+            add_at(R, note(m, beat * 2.5), t0 + pt * beat + humanize + 0.006, g * pan * 1.6)
+        if b == 0:
+            continue  # 1º compasso só violão (entrada discreta)
+        for s16 in range(16):
+            add_at(perc, shaker, t0 + s16 * beat / 4 + float(rng.normal(0, 0.004)), 0.5 if s16 % 2 else 0.8)
+        for pt in (0, 2.5):
+            add_at(perc, cajon_low, t0 + pt * beat, 0.5)
+        for pt in (1, 3):
+            add_at(perc, cajon_slap, t0 + pt * beat, 0.22)
+    gtr = np.stack([reverb(L, 0.22, 1.1), reverb(R, 0.22, 1.25)], axis=1)
+    pr = reverb(perc, 0.12, 0.7)
+    mix = gtr + np.stack([pr * 0.55, pr * 0.45], axis=1) * 0.6
+    mix = mix[:int(duration * SR)]
+    mix /= (np.max(np.abs(mix)) + 1e-9)
+    return fade(mix * 0.9, 0.8, min(2.5, duration / 4))
+
+
+def speech_spans(y: np.ndarray, thresh_db: float = -38, min_gap: float = 0.12):
+    """Trechos com fala [(ini, fim)] detectados pela energia - para sincronizar legenda ao áudio real."""
+    hop = int(0.01 * SR)
+    n = len(y) // hop
+    if n == 0:
+        return []
+    rms = np.sqrt(np.mean(y[:n * hop].reshape(n, hop) ** 2, axis=1) + 1e-12)
+    db = 20 * np.log10(rms / (np.max(rms) + 1e-12))
+    on = db > thresh_db
+    spans, start = [], None
+    for i, v in enumerate(on):
+        if v and start is None:
+            start = i
+        if not v and start is not None:
+            spans.append([start * 0.01, i * 0.01])
+            start = None
+    if start is not None:
+        spans.append([start * 0.01, n * 0.01])
+    merged = []
+    for s_, e_ in spans:
+        if merged and s_ - merged[-1][1] < min_gap:
+            merged[-1][1] = e_
+        else:
+            merged.append([s_, e_])
+    return [(a, b) for a, b in merged if b - a > 0.05]
+
+
 def music_from_file(path: str, duration: float, start: float = 0.0) -> np.ndarray:
     """Trilha do usuário em estéreo; repete com crossfade de 2 s se for mais curta que o vídeo."""
     y = load_audio(path, channels=2)[int(start * SR):]

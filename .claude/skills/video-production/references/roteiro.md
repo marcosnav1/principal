@@ -11,7 +11,9 @@
   "sfx_library": "sfx",                    // sfx/<nome>.wav substitui o efeito sintetizado de mesmo nome
   "end_pad": 0.4,                          // segundos extras no final
 
-  "loudness": -14,                         // LUFS final (-14 redes sociais, -16 podcast, -23 TV)
+  "loudness": -14,
+  "target_duration": 120.0,                // fecha a duração exata: mede as falas e distribui a folga nas pausas
+  "thumbnail": "imagens/01.png",           // thumbnail a partir de uma imagem (senão, quadro da 1ª cena)                         // LUFS final (-14 redes sociais, -16 podcast, -23 TV)
 
   "voice": {
     "engine": "auto",                      // auto | elevenlabs | openai | edge | gtts | piper | espeak
@@ -26,10 +28,11 @@
   },
 
   "music": {
-    "mood": "upbeat",                      // upbeat happy corporate inspiring calm lofi epic dramatic tense suspense none
+    "mood": "upbeat",                      // upbeat happy corporate inspiring calm lofi epic dramatic tense suspense violao none
     "file": null,                          // trilha específica (mp3/wav/m4a)
     "library": "musica",                   // pasta de trilhas: musica/<mood>/*.mp3 é escolhida pelo mood
     "start": 0,                            // começar a trilha em N segundos
+    "delay_scene": 2,                      // a trilha entra só nesta cena (opcional)
     "volume": 0.22,                        // 0..1 (sob a voz)
     "duck": 0.65,                          // quanto abaixa durante a fala
     "bpm": null,                           // opcional
@@ -47,6 +50,9 @@
     "subtitle_style": "karaoke",           // karaoke stroke box none
     "subtitle_color": null,                // cor da palavra ativa (padrão: destaque)
     "subtitle_position": null,             // 0..1 da altura (padrão 0.80 vertical / 0.87 horizontal)
+    "subtitle_size": null,                 // fração da largura (ex. 0.054)
+    "subtitle_max_words": null,            // por bloco (até 2 linhas); padrão 4 vertical / 7 horizontal
+    "subtitle_max_chars": null,            // por bloco; padrão 26 / 44
     "progress_bar": true,
     "handle": "@seucanal",
     "logo": "assets/logo.png"
@@ -74,7 +80,10 @@
 | `zoom` | float | Intensidade do movimento (1.0 padrão; 0.5 sutil; 1.5 forte) |
 | `shade` | str | Escurecimento p/ leitura: `bottom`, `top`, `both`, `full`, `none` |
 | `lower_third` | str \| obj | Tarja: `{ "title": "Nome", "subtitle": "Lugar, ano", "at": 0.6 }` |
-| `audio` | path | Narração GRAVADA por você para a cena (substitui o TTS; recebe limpeza de ruído e EQ) |
+| `audio` | path | Narração GRAVADA ou gerada fora (ex. ElevenLabs) para a cena; extensão opcional (`narracao/01` acha 01.mp3/.wav). Legenda sincronizada pelas pausas reais do áudio |
+| `subtitle_position` | float | Altura da legenda só nesta cena (desviar de objetos importantes) |
+| `lock_duration` | bool | Com `target_duration`, esta cena não recebe folga (ex. reação final de 0,5 s) |
+| `lower_third.y` | float | Altura da tarja (ex. 0.055 = canto superior) |
 
 Texto comum (`title`, `text`, `kicker`, `quote`...) também funciona sobre as imagens;
 use `text_position: "top"` quando o assunto da foto estiver no centro/baixo.

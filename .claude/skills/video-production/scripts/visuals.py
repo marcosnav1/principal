@@ -745,7 +745,7 @@ class Subtitles:
         key = (ci, active)
         if key in self._cache:
             return self._cache[key]
-        _, _, words = self.chunks[ci]
+        words = self.chunks[ci][2]
         lay, w, h, _ = layout_words([(wd, i == active) for i, (wd, _, _) in enumerate(words)], self.fnt, self.max_w)
         img = Image.new("RGBA", (int(self.max_w) + 2 * self.size, int(h) + 2 * self.size), (0, 0, 0, 0))
         stroke = max(4, self.size // 9)
@@ -764,7 +764,9 @@ class Subtitles:
         return img
 
     def draw(self, canvas, T):
-        for ci, (s, e, words) in enumerate(self.chunks):
+        for ci, chunk in enumerate(self.chunks):
+            s, e, words = chunk[:3]
+            yc = self.H * chunk[3] if len(chunk) > 3 and chunk[3] is not None else self.y_center
             if s <= T < e:
                 active = -1
                 for i, (_, ws, we) in enumerate(words):
@@ -773,5 +775,5 @@ class Subtitles:
                 img = self._render(ci, active)
                 p = (T - s) / 0.12
                 a, _, dy, sc = anim_state("pop", p)
-                paste(canvas, img, (self.W - img.width) / 2, self.y_center - img.height / 2 + dy, a, 0.92 + 0.08 * sc)
+                paste(canvas, img, (self.W - img.width) / 2, yc - img.height / 2 + dy, a, 0.92 + 0.08 * sc)
                 return
