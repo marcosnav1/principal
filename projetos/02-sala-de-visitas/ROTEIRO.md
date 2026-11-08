@@ -18,3 +18,11 @@ sofá com capa plástica, xícaras da cristaleira, lata de biscoito com linha de
 Regras herdadas do pacote anterior: uma voz por trecho; narradora só em planos sem rostos; movimentos
 de 2–4 %; legendas sem cobrir rostos/objetos centrais; sem vinheta, CTA pulsante ou risada gravada;
 final na fala de Júlia com reação ≤ 0,5 s.
+
+## Status (08/11/2026)
+
+- Vozes geradas no ElevenLabs (flow "O Brasil que a Gente Viveu — Ep 02 A sala de visitas (falas)"),
+  mesmo elenco do episódio 01, em `narracao/01.mp3` … `08.mp3`. Fala total 40,8 s → vídeo ≈ 45 s.
+- Imagens: PENDENTES. A chave Gemini usada está no plano gratuito (cota 0 para modelos de imagem).
+  Com faturamento ativo, gerar com `scripts/gemini_media.py image --model models/gemini-3-pro-image`
+  usando os retratos do episódio 01 como `--ref` e salvar em `imagens/`.
