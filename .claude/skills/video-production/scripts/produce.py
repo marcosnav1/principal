@@ -48,6 +48,22 @@ def log(*a):
     print(*a, flush=True)
 
 
+def load_env(*dirs):
+    """Carrega chaves de API de arquivos .env (projeto e diretório atual) sem sobrescrever o ambiente."""
+    for d in dirs:
+        p = os.path.join(d, ".env")
+        if not os.path.isfile(p):
+            continue
+        for line in open(p, encoding="utf-8"):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            v = v.strip().strip('"').strip("'")
+            if v:
+                os.environ.setdefault(k.strip(), v)
+
+
 # ------------------------------------------------------------------ legendas
 def estimate_words(text, dur):
     toks = text.split()
@@ -125,6 +141,25 @@ def build_scene(sc, idx, theme, W, H, subs_on, base_dir):
         bg_kind = BG_CYCLE[idx % len(BG_CYCLE)]
     if image and img_mode == "background":
         bg_kind = "image"
+
+    # --- cena ilustrada (imagens do usuário) x cena de animação
+    kind = str(sc.get("kind", "")).lower()
+    shots = sc.get("images") or ([image] if bg_kind == "image" else [])
+    is_photo = kind in ("imagem", "image", "foto", "photo") or bool(shots)
+    if is_photo and not shots:
+        raise ValueError(f"cena {idx + 1}: kind 'imagem' precisa de 'images': [\"imagens/foto.jpg\", ...]")
+
+    def _abs(p):
+        return p if os.path.isabs(p) else os.path.join(base_dir, p)
+
+    shots = [_abs(x) if isinstance(x, str) else {**x, "path": _abs(x["path"])} for x in shots]
+    for x in shots:
+        p = x if isinstance(x, str) else x["path"]
+        if not os.path.isfile(p):
+            raise FileNotFoundError(f"cena {idx + 1}: imagem não encontrada: {p}")
+    if is_photo:
+        bg_kind = "image"
+        text_color = sc.get("text_color") or "#ffffff"
 
     v0, vdur = sc["_voice_start"], sc["_voice_dur"]
     first_anim = 0.25 if idx == 0 else 0.35
@@ -204,10 +239,31 @@ def build_scene(sc, idx, theme, W, H, subs_on, base_dir):
         pos.append((left, y))
         y += e.height + gap
     s = Scene()
-    s.bg = V.Background(bg_kind, W, H, pal + ([sc["colors"][2]] if sc.get("colors") and len(sc["colors"]) > 2 else []),
-                        accent, image=image, seed=idx * 7 + 3, motion=sc.get("image_motion", "zoom_in"),
-                        shade_top=tpos == "top")
-    s.items = list(zip(els, pos))
+    items = list(zip(els, pos))
+    if is_photo:
+        has_text = bool(els)
+        shade = sc.get("shade") or ("top" if tpos == "top" else "bottom" if (has_text or subs_on) else "none")
+        motion = sc.get("motion") or sc.get("image_motion")
+        shots = [x if isinstance(x, dict) or not motion else {"path": x, "motion": motion} for x in shots]
+        if sc.get("focus"):
+            shots = [{**({"path": x} if isinstance(x, str) else x), "focus": x.get("focus", sc["focus"])
+                      if isinstance(x, dict) else sc["focus"]} for x in shots]
+        s.bg = V.PhotoBackground(W, H, shots, sc["_dur"], shade=shade, look=sc.get("look", theme.get("look")),
+                                 fit=sc.get("fit", theme.get("fit", "auto")), strength=float(sc.get("zoom", 1.0)),
+                                 seed=idx)
+        lt = sc.get("lower_third")
+        if lt:
+            lt = lt if isinstance(lt, dict) else {"title": lt}
+            e = V.LowerThirdEl(lt.get("title", ""), lt.get("subtitle"), fb, freg, u, accent,
+                               max_w=W * 0.8)
+            e.appear, e.end = float(lt.get("at", 0.6)), sc["_dur"] - 0.5
+            ly = H * ((0.62 if vertical else 0.64) if subs_on else (0.78 if vertical else 0.8))
+            items.append((e, (W * 0.06, ly)))
+    else:
+        s.bg = V.Background(bg_kind, W, H, pal + ([sc["colors"][2]] if sc.get("colors") and len(sc["colors"]) > 2 else []),
+                            accent, image=image, seed=idx * 7 + 3, motion=sc.get("image_motion", "zoom_in"),
+                            shade_top=tpos == "top")
+    s.items = items
     s.accent = accent
     return s
 
@@ -271,19 +327,29 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
     # 1) narração
     log(f"▶ Narração ({vcfg['engine']}, {vcfg['voice']})")
     used = set()
+    texts = [V.strip_marks(sc.get("narration", "")).strip() for sc in scenes]
     for i, sc in enumerate(scenes):
-        nar = V.strip_marks(sc.get("narration", "")).strip()
+        nar = texts[i]
         sc["_wav"], sc["_voice_dur"], sc["_words"] = None, 0.0, None
-        if not nar:
+        rec = sc.get("audio") or sc.get("narration_file")
+        if rec:  # narração gravada pelo usuário
+            rec = rec if os.path.isabs(rec) else os.path.join(base_dir, rec)
+            wav, d, words, eng = T.recorded(rec, cache, vcfg.get("recording_polish", "gravacao"),
+                                            T.lang_of(vcfg.get("voice") or ""))
+        elif nar:
+            vc = {**vcfg, **(sc.get("voice") or {})}
+            vc["previous_text"] = texts[i - 1] if i > 0 else None  # continuidade de entonação (ElevenLabs)
+            vc["next_text"] = texts[i + 1] if i + 1 < len(texts) else None
+            wav, d, words, eng = T.synthesize(nar, cache, vc)
+        else:
             continue
-        vc = {**vcfg, **(sc.get("voice") or {})}
-        wav, d, words, eng = T.synthesize(nar, cache, vc["engine"], vc["voice"], vc.get("rate"), vc.get("pitch"))
         used.add(eng)
         sc["_wav"], sc["_voice_dur"] = wav, d
-        sc["_words"] = words if words else estimate_words(nar, d)
+        sc["_words"] = words if words else (estimate_words(nar, d) if nar else None)
         log(f"  cena {i + 1}: {d:.1f}s [{eng}]")
     if "espeak" in used:
-        log("  ⚠ usando espeak (voz robótica). Instale/conecte edge-tts para vozes neurais.")
+        log("  ⚠ usando espeak (voz robótica). Configure ELEVENLABS_API_KEY ou OPENAI_API_KEY no .env, "
+            "ou rode com internet (edge-tts).")
 
     # 2) linha do tempo
     t0 = 0.0
@@ -381,13 +447,25 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
         if sc["_wav"]:
             A.add_at(voice, A.load_audio(sc["_wav"]), sc["_start"] + sc["_voice_start"])
     mcfg = {"mood": "upbeat", "volume": 0.22, **(sb.get("music") or {})}
+    lib = mcfg.get("library", "musica")
+    lib = lib if os.path.isabs(lib) else os.path.join(base_dir, lib)
+    mp = None
     if mcfg.get("file"):
         mp = mcfg["file"] if os.path.isabs(mcfg["file"]) else os.path.join(base_dir, mcfg["file"])
-        music = A.music_from_file(mp, total)
+    elif mcfg["mood"] not in (None, "none", False):
+        mp = A.find_music(lib, str(mcfg["mood"]), int(mcfg.get("seed", 0)))
+    if mp:
+        log(f"  trilha: {os.path.relpath(mp, base_dir)}")
+        music = A.music_from_file(mp, total, float(mcfg.get("start", 0)))
     elif mcfg["mood"] in (None, "none", False):
-        music = np.zeros(n)
+        music = np.zeros((n, 2))
     else:
-        music = A.synth_music(total, mcfg["mood"], mcfg.get("bpm"), seed=int(mcfg.get("seed", len(scenes))))
+        log(f"  trilha: sintetizada ({mcfg['mood']}) — para som profissional coloque mp3 em {os.path.relpath(lib, base_dir)}/")
+        music = A.to_stereo(A.synth_music(total, mcfg["mood"], mcfg.get("bpm"), seed=int(mcfg.get("seed", len(scenes)))), 12)
+    sfx_dirs = [d for d in (os.path.join(base_dir, sb.get("sfx_library", "sfx")),) if os.path.isdir(d)]
+
+    def S(name):
+        return A.load_sfx(name, sfx_dirs)
     fx = np.zeros(n)
     auto = sb.get("sfx_auto", True)
     for i, (sc, so) in enumerate(zip(scenes, scene_objs)):
@@ -395,28 +473,32 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
         if auto:
             kind = sc.get("transition") or theme["transition"]
             if i > 0 and kind != "none":
-                A.add_at(fx, A.sfx("swoosh" if kind == "fade" else "whoosh"), st - 0.12, 0.55)
+                A.add_at(fx, S("swoosh" if kind == "fade" else "whoosh"), st - 0.12, 0.55)
             for e, _ in so.items:
                 if getattr(e, "sfx_times", None):
                     for tt in e.sfx_times:
-                        A.add_at(fx, A.sfx("pop"), st + tt, 0.55)
+                        A.add_at(fx, S("pop"), st + tt, 0.55)
                 elif e.sfx:
-                    A.add_at(fx, A.sfx(e.sfx), st + e.appear, 0.7)
+                    A.add_at(fx, S(e.sfx), st + e.appear, 0.7)
             if i == 0 and sc.get("type") == "title":
-                A.add_at(fx, A.sfx("impact"), st + 0.2, 0.6)
+                A.add_at(fx, S("impact"), st + 0.2, 0.6)
         for item in sc.get("sfx", []):
             name, at, g = (item, 0.0, 0.8) if isinstance(item, str) else (item["name"], item.get("at", 0.0),
                                                                            item.get("volume", 0.8))
-            src = name if name in A.SFX_NAMES or os.path.isabs(name) else os.path.join(base_dir, name)
-            A.add_at(fx, A.load_sfx(src), st + float(at), g)
+            src = name if name in A.SFX_NAMES or os.path.isabs(name) or not os.path.splitext(name)[1] \
+                else os.path.join(base_dir, name)
+            A.add_at(fx, S(src), st + float(at), g)
     mix = A.master(voice, music, fx, music_volume=float(mcfg["volume"]), sfx_volume=float(sb.get("sfx_volume", 0.6)),
                    duck=float(mcfg.get("duck", 0.65)))[:int(total * A.SR)]
     mix = A.fade(mix, 0.02, 0.4)
     A.write_wav(os.path.join(work, "voice.wav"), voice[:len(mix)])
     A.write_wav(os.path.join(work, "music.wav"), music[:len(mix)] * float(mcfg["volume"]))
     A.write_wav(os.path.join(work, "sfx.wav"), fx[:len(mix)] * 0.6)
+    A.write_wav(os.path.join(work, "mix_bruto.wav"), mix)
     mix_path = os.path.join(work, "mix.wav")
-    A.write_wav(mix_path, mix)
+    lufs = float(sb.get("loudness", -14))
+    meas = A.loudnorm_2pass(os.path.join(work, "mix_bruto.wav"), mix_path, I=lufs)
+    log(f"  loudness: {meas['input_i']} LUFS -> {lufs} LUFS (2 passadas)")
 
     # 6) legendas .srt + linha do tempo
     srt_path = os.path.splitext(out_path)[0] + ".srt"
@@ -433,8 +515,8 @@ def produce(sb, base_dir, out_path, fmt, preview=False, still=None, engine=None,
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
            "-r", str(fps), "-i", "-", "-i", mix_path, "-map", "0:v", "-map", "1:a",
            "-c:v", "libx264", "-preset", "veryfast" if preview else "medium", "-crf", "23" if preview else "19",
-           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
-           "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "48000", "-shortest", "-movflags", "+faststart",
+           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "2",
+           "-shortest", "-movflags", "+faststart",
            out_path]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     last = time.time()
@@ -475,10 +557,12 @@ def main():
     ap.add_argument("--list-engines", action="store_true")
     a = ap.parse_args()
     if a.list_engines:
+        load_env(os.path.dirname(os.path.abspath(a.storyboard)), os.getcwd())
         print("Motores de voz disponíveis:", ", ".join(T.available_engines()) or "nenhum")
         return
     sb = json.load(open(a.storyboard, encoding="utf-8"))
     base = os.path.dirname(os.path.abspath(a.storyboard))
+    load_env(base, os.getcwd())
     fmts = (a.format or sb.get("format", "9:16")).split(",")
     name = os.path.splitext(os.path.basename(a.storyboard))[0]
     for fmt in fmts:

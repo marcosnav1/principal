@@ -5,30 +5,88 @@ aceita arquivos do usuário (trilha em mp3/wav e efeitos personalizados).
 """
 from __future__ import annotations
 
+import glob
+import json
 import math
+import os
 import subprocess
 import wave
 
 import numpy as np
 
-SR = 44100
+SR = 48000
 RNG = np.random.default_rng(7)
 
 
 # ------------------------------------------------------------------ I/O
-def load_audio(path: str) -> np.ndarray:
-    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-f", "f32le", "-ac", "1",
+def load_audio(path: str, channels: int = 1) -> np.ndarray:
+    """Decodifica qualquer formato via ffmpeg. channels=2 devolve array (n, 2)."""
+    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-f", "f32le", "-ac", str(channels),
                           "-ar", str(SR), "-"], check=True, capture_output=True).stdout
-    return np.frombuffer(raw, dtype=np.float32).astype(np.float64)
+    y = np.frombuffer(raw, dtype=np.float32).astype(np.float64)
+    return y.reshape(-1, 2) if channels == 2 else y
 
 
 def write_wav(path: str, y: np.ndarray) -> None:
+    """WAV 24 bits (mono ou estéreo) - sem perda de qualidade nos intermediários."""
     y = np.clip(y, -1, 1)
+    ch = 1 if y.ndim == 1 else y.shape[1]
+    pcm = (y.reshape(-1) * 8388607).astype("<i4")
+    data = np.frombuffer(pcm.tobytes(), dtype=np.uint8).reshape(-1, 4)[:, :3].tobytes()
     with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
+        w.setnchannels(ch)
+        w.setsampwidth(3)
         w.setframerate(SR)
-        w.writeframes((y * 32767).astype("<i2").tobytes())
+        w.writeframes(data)
+
+
+def to_stereo(y: np.ndarray, width_ms: float = 0.0) -> np.ndarray:
+    """Mono -> estéreo. width_ms > 0 atrasa levemente o canal direito (efeito Haas = abertura)."""
+    if y.ndim == 2:
+        return y
+    if width_ms <= 0:
+        return np.stack([y, y], axis=1)
+    d = int(width_ms / 1000 * SR)
+    r = np.concatenate([np.zeros(d), y[:-d]]) if d else y
+    return np.stack([y * 0.97 + r * 0.03, r * 0.97 + y * 0.03], axis=1)
+
+
+# ------------------------------------------------------------------ tratamento de voz
+VOICE_CHAIN = {
+    # TTS já sai limpo: só EQ de presença, de-esser, compressão suave e limitador
+    "tts": ("highpass=f=70,equalizer=f=180:t=q:w=1.2:g=1.5,equalizer=f=320:t=q:w=1.0:g=-2,"
+            "equalizer=f=3200:t=q:w=1.3:g=2,equalizer=f=11000:t=q:w=0.9:g=1.5,deesser=i=0.35,"
+            "acompressor=threshold=0.125:ratio=2.5:attack=8:release=140:knee=4:makeup=1.4,"
+            "alimiter=limit=0.94:level=disabled"),
+    # gravação do usuário: + redução de ruído, corte de graves de ambiente e compressão mais firme
+    "gravacao": ("highpass=f=85,afftdn=nr=14:nf=-32:tn=1,anlmdn=s=4,equalizer=f=200:t=q:w=1.2:g=1,"
+                 "equalizer=f=350:t=q:w=1.0:g=-3,equalizer=f=3000:t=q:w=1.3:g=2.5,"
+                 "equalizer=f=10000:t=q:w=0.9:g=2,deesser=i=0.45,"
+                 "acompressor=threshold=0.1:ratio=3.5:attack=6:release=120:knee=4:makeup=1.8,"
+                 "alimiter=limit=0.94:level=disabled"),
+    "nenhum": "anull",
+}
+
+
+def polish_voice(src: str, dst: str, preset: str = "tts") -> None:
+    """Aplica a cadeia de voz (EQ, de-esser, compressor, limitador) com ffmpeg."""
+    chain = VOICE_CHAIN.get(preset, preset)  # aceita preset ou cadeia ffmpeg personalizada
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-af", chain, "-ac", "1",
+                    "-ar", str(SR), "-c:a", "pcm_s24le", dst], check=True)
+
+
+def loudnorm_2pass(src: str, dst: str, I: float = -14.0, TP: float = -1.5, LRA: float = 11.0) -> dict:
+    """Normalização EBU R128 em duas passadas (precisa, sem 'bombeamento')."""
+    flt = f"loudnorm=I={I}:TP={TP}:LRA={LRA}:print_format=json"
+    err = subprocess.run(["ffmpeg", "-hide_banner", "-i", src, "-af", flt, "-f", "null", "-"],
+                         capture_output=True, text=True).stderr
+    m = json.loads(err[err.rindex("{"):err.rindex("}") + 1])
+    flt2 = (f"loudnorm=I={I}:TP={TP}:LRA={LRA}:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
+            f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:"
+            "linear=true")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-af", flt2, "-ar", str(SR),
+                    "-c:a", "pcm_s24le", dst], check=True)
+    return m
 
 
 def add_at(buf: np.ndarray, sig: np.ndarray, t: float, gain: float = 1.0) -> None:
@@ -78,10 +136,11 @@ def reverb(x: np.ndarray, mix: float = 0.25, size: float = 1.0) -> np.ndarray:
 def fade(y: np.ndarray, fin: float = 0.01, fout: float = 0.05) -> np.ndarray:
     y = y.copy()
     a, b = int(fin * SR), int(fout * SR)
+    sh = (-1, 1) if y.ndim == 2 else (-1,)
     if a:
-        y[:a] *= np.linspace(0, 1, a)
+        y[:a] *= np.linspace(0, 1, a).reshape(sh)
     if b:
-        y[-b:] *= np.linspace(1, 0, b)
+        y[-b:] *= np.linspace(1, 0, b).reshape(sh)
     return y
 
 
@@ -261,14 +320,37 @@ def synth_music(duration: float, mood: str = "upbeat", bpm: float | None = None,
     return fade(mix * 0.9, 1.0, min(3.0, duration / 4))
 
 
-def music_from_file(path: str, duration: float) -> np.ndarray:
-    y = load_audio(path)
+def music_from_file(path: str, duration: float, start: float = 0.0) -> np.ndarray:
+    """Trilha do usuário em estéreo; repete com crossfade de 2 s se for mais curta que o vídeo."""
+    y = load_audio(path, channels=2)[int(start * SR):]
+    n = int(duration * SR)
     if len(y) == 0:
-        return np.zeros(int(duration * SR))
-    reps = int(math.ceil(duration * SR / len(y)))
-    y = np.tile(y, reps)[:int(duration * SR)]
-    y /= (np.max(np.abs(y)) + 1e-9)
-    return fade(y * 0.9, 0.5, min(3.0, duration / 4))
+        return np.zeros((n, 2))
+    xf = min(int(2 * SR), len(y) // 4)
+    out = y.copy()
+    while len(out) < n:
+        ramp = np.linspace(0, 1, xf)[:, None]
+        out = np.concatenate([out[:-xf], out[-xf:] * (1 - ramp) + y[:xf] * ramp, y[xf:]])
+    out = out[:n]
+    out /= (np.max(np.abs(out)) + 1e-9)
+    return fade(out * 0.9, 0.3, min(3.0, duration / 4))
+
+
+AUDIO_EXT = (".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac")
+
+
+def find_music(lib_dir: str, mood: str, seed: int = 0) -> str | None:
+    """Procura trilha em <lib>/<mood>/*.mp3, depois <lib>/*<mood>*.mp3, depois qualquer uma em <lib>."""
+    if not lib_dir or not os.path.isdir(lib_dir):
+        return None
+    pools = [glob.glob(os.path.join(lib_dir, mood, "*")),
+             [p for p in glob.glob(os.path.join(lib_dir, "*")) if mood.lower() in os.path.basename(p).lower()],
+             glob.glob(os.path.join(lib_dir, "*"))]
+    for pool in pools:
+        files = sorted(p for p in pool if p.lower().endswith(AUDIO_EXT))
+        if files:
+            return files[seed % len(files)]
+    return None
 
 
 # ------------------------------------------------------------------ efeitos sonoros
@@ -344,12 +426,31 @@ SFX_NAMES = ["whoosh", "swoosh", "pop", "click", "ding", "success", "coin", "imp
              "glitch", "typing", "notification"]
 
 
-def load_sfx(name_or_path: str) -> np.ndarray:
-    try:
-        return sfx(name_or_path)
-    except KeyError:
+_SFX_CACHE: dict = {}
+
+
+def load_sfx(name_or_path: str, lib_dirs=()) -> np.ndarray:
+    """Prioridade: arquivo da biblioteca do usuário (sfx/<nome>.wav|mp3) > caminho direto > sintetizado."""
+    key = (name_or_path, tuple(lib_dirs))
+    if key in _SFX_CACHE:
+        return _SFX_CACHE[key]
+    y = None
+    for d in lib_dirs:
+        for ext in AUDIO_EXT:
+            p = os.path.join(d, name_or_path + ext)
+            if os.path.isfile(p):
+                y = load_audio(p)
+                break
+        if y is not None:
+            break
+    if y is None and os.path.isfile(name_or_path):
         y = load_audio(name_or_path)
-        return y / (np.max(np.abs(y)) + 1e-9) * 0.8
+    if y is not None:
+        y = y / (np.max(np.abs(y)) + 1e-9) * 0.8
+    else:
+        y = sfx(name_or_path)
+    _SFX_CACHE[key] = y
+    return y
 
 
 # ------------------------------------------------------------------ mixagem
@@ -361,9 +462,16 @@ def duck_gain(voice: np.ndarray, base: float, depth: float = 0.65) -> np.ndarray
 
 
 def master(voice, music, effects, music_volume=0.22, sfx_volume=0.6, duck=0.65):
+    """Mixagem estéreo: voz e efeitos no centro, música estéreo com ducking pela voz."""
     n = max(len(voice), len(music), len(effects))
-    v, m, e = (np.pad(a, (0, n - len(a))) for a in (voice, music, effects))
-    mix = v * 1.0 + m * duck_gain(v, music_volume, duck) + e * sfx_volume
+
+    def fit(a):
+        a = to_stereo(a)
+        return np.pad(a, ((0, n - len(a)), (0, 0)))
+
+    v, m, e = fit(voice), fit(music), fit(effects)
+    g = duck_gain(np.pad(voice, (0, n - len(voice))), music_volume, duck)[:, None]
+    mix = v + m * g + e * sfx_volume
     peak = np.max(np.abs(mix)) + 1e-9
     if peak > 0.98:
         mix = np.tanh(mix / peak * 1.2) / np.tanh(1.2) * 0.98

@@ -532,6 +532,199 @@ class Background:
         return frame
 
 
+# ------------------------------------------------------------------ cenas ilustradas (imagens do usuário)
+def grade(img: Image.Image, kind: str | None, seed: int = 0) -> Image.Image:
+    """Correção de cor / look: none warm cool vintage bw cinematic vivid matte."""
+    if not kind or kind == "none":
+        return img
+    if kind == "vivid":
+        from PIL import ImageEnhance
+        return ImageEnhance.Contrast(ImageEnhance.Color(img).enhance(1.28)).enhance(1.06)
+    a = np.asarray(img.convert("RGB")).astype(np.float32) / 255
+    L = (0.2126 * a[..., 0] + 0.7152 * a[..., 1] + 0.0722 * a[..., 2])[..., None]
+    if kind == "warm":
+        a = a * [1.05, 1.0, 0.88] + [0.02, 0.01, 0]
+    elif kind == "cool":
+        a = a * [0.92, 1.0, 1.08]
+    elif kind == "bw":
+        c = np.clip((L - 0.5) * 1.15 + 0.5, 0, 1)
+        a = np.repeat(c, 3, axis=2)
+    elif kind == "cinematic":
+        a = a + (1 - L) * np.array([-0.05, 0.015, 0.05]) + L * np.array([0.06, 0.015, -0.05])
+        a = np.clip(a, 0, 1)
+        a = a + (a - 0.5) * 0.12  # contraste em S leve
+    elif kind == "matte":
+        a = a * 0.9 + 0.06
+    elif kind == "vintage":
+        a = a * 0.86 + 0.07
+        a[..., 0] = a[..., 0] ** 0.92
+        a[..., 2] = a[..., 2] ** 1.12 * 0.95
+        a = a * 0.8 + L * 0.2
+        a = a + np.random.default_rng(seed).normal(0, 0.022, a.shape[:2])[..., None]
+    return Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8), "RGB")
+
+
+def _shade_overlay(W, H, shade, strength=1.0):
+    ramp = np.linspace(0, 1, H)[:, None]
+    a = np.zeros((H, 1))
+    if shade in ("bottom", "both"):
+        a = np.maximum(a, 0.78 * np.clip((ramp - 0.45) / 0.55, 0, 1) ** 1.4)
+    if shade in ("top", "both"):
+        a = np.maximum(a, 0.65 * np.clip(1 - ramp / 0.42, 0, 1) ** 1.3)
+    if shade == "full":
+        a = a + 0.35
+    ov = np.zeros((H, W, 4), np.uint8)
+    ov[..., 3] = (np.clip(a * strength, 0, 1) * 255).astype(np.uint8)
+    return Image.fromarray(ov, "RGBA")
+
+
+MOTIONS = ["zoom_in", "pan_right", "zoom_out", "pan_left", "pan_up", "zoom_in", "pan_down"]
+
+
+class PhotoShot:
+    """Uma imagem preparada (grade + enquadramento) com movimento de câmera."""
+    HEAD = 1.22  # folga de resolução para o zoom não perder nitidez
+
+    def __init__(self, W, H, path, motion="auto", focus=(0.5, 0.45), fit="auto", look=None, idx=0,
+                 strength=1.0):
+        self.W, self.H = W, H
+        SW, SH = int(W * self.HEAD), int(H * self.HEAD)
+        img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+        ar_img, ar_out = img.width / img.height, W / H
+        if fit == "auto":  # proporção muito diferente -> fundo desfocado + foto inteira
+            fit = "contain" if max(ar_img / ar_out, ar_out / ar_img) > 1.55 else "cover"
+        img = grade(img, look, idx)
+        fx, fy = focus
+        if fit == "contain":
+            bg = ImageOps.fit(img, (SW, SH), Image.LANCZOS, centering=(fx, fy))
+            bg = bg.filter(ImageFilter.GaussianBlur(SW * 0.035))
+            bg = Image.blend(bg, Image.new("RGB", bg.size, (0, 0, 0)), 0.45)
+            fg = ImageOps.contain(img, (int(SW * 0.9), int(SH * 0.9)), Image.LANCZOS)
+            src = bg.convert("RGBA")
+            sh = Image.new("RGBA", src.size, (0, 0, 0, 0))
+            ox, oy = (SW - fg.width) // 2, (SH - fg.height) // 2
+            ImageDraw.Draw(sh).rectangle((ox, oy + 20, ox + fg.width, oy + fg.height + 20), fill=(0, 0, 0, 150))
+            src.alpha_composite(sh.filter(ImageFilter.GaussianBlur(30)))
+            src.alpha_composite(fg.convert("RGBA"), (ox, oy))
+            self.focus = (0.5 + (fx - 0.5) * fg.width / SW, 0.5 + (fy - 0.5) * fg.height / SH)
+        else:
+            src = ImageOps.fit(img, (SW, SH), Image.LANCZOS, centering=(fx, fy)).convert("RGBA")
+            self.focus = (fx, fy)
+        self.src = src
+        self.motion = MOTIONS[idx % len(MOTIONS)] if motion in (None, "auto") else motion
+        self.strength = strength
+
+    def frame(self, p):
+        p = clamp(p)
+        p = 0.4 * p + 0.6 * ease_in_out(p)
+        zmax = 1 + 0.18 * self.strength
+        fx, fy = self.focus
+        m = self.motion
+        if m == "zoom_in":
+            f = 1 / (1 + (zmax - 1) * p)
+            cx, cy = 0.5 + (fx - 0.5) * p, 0.5 + (fy - 0.5) * p
+        elif m == "zoom_out":
+            f = 1 / (zmax - (zmax - 1) * p)
+            cx, cy = fx + (0.5 - fx) * p, fy + (0.5 - fy) * p
+        elif m in ("pan_left", "pan_right"):
+            f = 1 / zmax
+            span = (1 - f) / 2 * 0.9
+            d = -1 if m == "pan_left" else 1
+            cx, cy = 0.5 - d * span + 2 * d * span * p, fy
+        elif m in ("pan_up", "pan_down"):
+            f = 1 / zmax
+            span = (1 - f) / 2 * 0.9
+            d = -1 if m == "pan_up" else 1
+            cx, cy = fx, 0.5 - d * span + 2 * d * span * p
+        else:  # static / respiração mínima
+            f = 1 / (1 + 0.04 * p + 0.02)
+            cx, cy = fx, fy
+        cx = clamp(cx, f / 2, 1 - f / 2)
+        cy = clamp(cy, f / 2, 1 - f / 2)
+        SW, SH = self.src.size
+        w, h = f * SW, f * SH
+        box = (cx * SW - w / 2, cy * SH - h / 2, cx * SW + w / 2, cy * SH + h / 2)
+        return self.src.resize((self.W, self.H), Image.BILINEAR, box=box)
+
+
+class PhotoBackground:
+    """Fundo de cena ilustrada: 1+ imagens com Ken Burns, crossfade entre elas, look e sombreamento."""
+
+    def __init__(self, W, H, shots, scene_dur, shade="bottom", look=None, fit="auto", xfade=0.7,
+                 strength=1.0, seed=0):
+        self.W, self.H, self.dur, self.xf = W, H, scene_dur, xfade
+        norm = []
+        for i, s in enumerate(shots):
+            s = {"path": s} if isinstance(s, str) else dict(s)
+            norm.append(s)
+        fixed = sum(s.get("duration", 0) for s in norm)
+        free = [s for s in norm if not s.get("duration")]
+        rest = max(0.5, scene_dur - fixed) / max(1, len(free))
+        t = 0.0
+        self.shots = []
+        for i, s in enumerate(norm):
+            d = s.get("duration") or rest
+            shot = PhotoShot(W, H, s["path"], s.get("motion", "auto"), tuple(s.get("focus", (0.5, 0.45))),
+                             s.get("fit", fit), s.get("look", look), idx=i + seed, strength=s.get("zoom", strength))
+            self.shots.append((t, d, shot))
+            t += d
+        ov = _shade_overlay(W, H, shade) if shade and shade != "none" else Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        self.overlay = Image.alpha_composite(ov, vignette(W, H, 0.35))  # 1 composição por quadro
+
+    def _shot_frame(self, i, t):
+        st, d, shot = self.shots[i]
+        return shot.frame((t - st + self.xf / 2) / (d + self.xf))
+
+    def render(self, t, gt=0.0):
+        i = 0
+        for k, (st, d, _) in enumerate(self.shots):
+            if t >= st:
+                i = k
+        frame = self._shot_frame(i, t)
+        st, d, _ = self.shots[i]
+        if i + 1 < len(self.shots) and t > st + d - self.xf / 2:
+            p = (t - (st + d - self.xf / 2)) / self.xf
+            frame = Image.blend(frame, self._shot_frame(i + 1, t), ease_in_out(p))
+        frame.alpha_composite(self.overlay)
+        return frame
+
+
+class LowerThirdEl(Element):
+    """Tarja de identificação (título + subtítulo) com barra de destaque, entra e sai animada."""
+
+    def __init__(self, title, subtitle, font_bold, font_reg, u, accent, text_color="#ffffff", max_w=900):
+        self.anim, self.end = "left", None
+        ft, fs = font(font_bold, int(u * 0.05)), font(font_reg, int(u * 0.034))
+        pad = int(u * 0.028)
+        tw = min(max_w, max(ft.getlength(title or ""), fs.getlength(subtitle or "")))
+        a1, d1 = ft.getmetrics()
+        a2, d2 = fs.getmetrics()
+        h = pad * 2 + a1 + d1 + ((a2 + d2 + pad // 3) if subtitle else 0)
+        bar = max(6, int(u * 0.011))
+        w = int(tw + pad * 2 + bar)
+        img = Image.new("RGBA", (w + 40, h + 40), (0, 0, 0, 0))
+        sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        ImageDraw.Draw(sh).rectangle((20, 26, 20 + w, 26 + h), fill=(0, 0, 0, 120))
+        img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(12)))
+        d = ImageDraw.Draw(img)
+        d.rectangle((20, 20, 20 + w, 20 + h), fill=(10, 10, 14, 200))
+        d.rectangle((20, 20, 20 + bar, 20 + h), fill=hex2rgb(accent, 255))
+        d.text((20 + bar + pad, 20 + pad), title or "", font=ft, fill=hex2rgb(text_color, 255))
+        if subtitle:
+            d.text((20 + bar + pad, 20 + pad + a1 + d1 + pad // 3), subtitle, font=fs, fill=hex2rgb(accent, 255))
+        self.img = img
+        self.height = h
+
+    def draw(self, canvas, x0, y0, t):
+        lt = t - self.appear
+        if lt <= 0:
+            return
+        a, dx, dy, sc = anim_state("left", lt / 0.55)
+        if self.end is not None and t > self.end:
+            a *= clamp(1 - (t - self.end) / 0.35)
+        paste(canvas, self.img, x0 - 20 + dx, y0 - 20, a)
+
+
 # ------------------------------------------------------------------ legendas
 class Subtitles:
     def __init__(self, W, H, font_path, accent, style="karaoke", position=None, size=None, color="#ffffff"):

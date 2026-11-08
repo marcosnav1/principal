@@ -11,6 +11,26 @@ e mixagem → MP4 H.264/AAC normalizado a -14 LUFS**, com `.srt` e thumbnail.
 
 Scripts em `.claude/skills/video-production/scripts/` (abaixo: `$SKILL`).
 
+## Estrutura de projeto (recomendada)
+
+```
+python3 $SKILL/scripts/new_project.py meu-video                # pastas + roteiro modelo + .env.example
+python3 $SKILL/scripts/new_project.py meu-video --from-images  # 1 cena ilustrada por imagem de imagens/
+```
+`imagens/` fotos do usuário · `narracao/` voz gravada por cena · `musica/<clima>/` trilhas
+licenciadas · `sfx/` efeitos próprios · `.env` chaves de API · `out/` resultados.
+Configuração de chaves e bibliotecas: `references/configuracao.md`.
+
+## Dois tipos de cena
+
+- **Animação** (`"kind": "animacao"`): tipografia cinética, números, listas, citações, CTA.
+- **Ilustrada** (`"kind": "imagem"`): imagens do usuário com Ken Burns, `focus` no assunto,
+  `look` (cinematic, warm, vintage, bw...), várias imagens por cena com crossfade, tarja
+  (`lower_third`) e fundo desfocado automático quando a proporção não bate.
+Intercale: abertura animada → 2–3 cenas ilustradas → cena animada com a ideia-chave → ... → CTA animado.
+Antes de escrever a narração de uma cena ilustrada, OLHE a imagem (Read) e descreva o que ela mostra;
+defina `focus` no rosto/assunto principal.
+
 ## Fluxo de trabalho
 
 1. **Entender o pedido** – objetivo, público, plataforma (define o formato), duração
@@ -34,8 +54,9 @@ Scripts em `.claude/skills/video-production/scripts/` (abaixo: `$SKILL`).
 
 ## Voz (TTS)
 
-Ordem automática (`"engine": "auto"`): **ElevenLabs** (se `ELEVENLABS_API_KEY`) →
-**edge-tts** (neural, grátis, precisa de internet; fornece tempo de cada palavra →
+Ordem automática (`"engine": "auto"`): **ElevenLabs** (se `ELEVENLABS_API_KEY`; tempos por
+palavra e entonação contínua entre cenas) → **OpenAI** (se `OPENAI_API_KEY`; `instructions` dirige o
+tom) → **edge-tts** (neural, grátis, precisa de internet; fornece tempo de cada palavra →
 legenda karaokê exata) → **gTTS** → **Piper** (offline, `PIPER_MODEL=.onnx`) →
 **espeak-ng** (offline, robótico — último recurso; avise o usuário se for usado).
 
@@ -44,6 +65,11 @@ Vozes edge recomendadas: `pt-BR-FranciscaNeural`, `pt-BR-AntonioNeural`,
 `en-US-AvaMultilingualNeural`, `es-MX-DaliaNeural`. Lista completa: `edge-tts --list-voices`.
 Ajustes: `"rate": "+8%"`, `"pitch": "-2Hz"`. Cada cena pode ter sua própria `voice`
 (diálogos, entrevistador/especialista).
+
+**Narração gravada**: `"audio": "narracao/cena01.mp3"` na cena — recebe redução de ruído, EQ,
+de-esser e compressão; legenda sincronizada se `faster-whisper` estiver instalado.
+Toda voz passa por cadeia de tratamento (EQ de presença, de-esser, compressor, limitador).
+As chaves podem ficar em `.env` na pasta do roteiro (carregado automaticamente).
 
 Em sandbox sem acesso a `speech.platform.bing.com`, o pipeline cai para espeak
 automaticamente; o vídeo sai completo, mas recomende rodar localmente para voz neural.
@@ -68,7 +94,9 @@ automaticamente; o vídeo sai completo, mas recomende rodar localmente para voz 
 
 ## Som
 
-- **Trilha procedural** (sem direitos autorais, muda de tom a cada vídeo):
+- **Trilha licenciada (recomendado)**: arquivos em `musica/<mood>/` são escolhidos pelo `mood`;
+  ou `"file"`. Estéreo, loop com crossfade. Sem arquivo, cai na trilha sintetizada (qualidade de rascunho).
+- **Trilha procedural** (fallback, sem direitos autorais):
   `upbeat`, `happy`, `corporate`/`inspiring`, `calm`/`lofi`, `epic`/`dramatic`,
   `tense`/`suspense`, `none`. Ou `"file": "minha-trilha.mp3"` (loop/corte automáticos).
 - **Ducking**: a música abaixa sozinha quando há voz (`duck` 0–1, padrão 0.65).
@@ -76,7 +104,8 @@ automaticamente; o vídeo sai completo, mas recomende rodar localmente para voz 
   ding no botão) + manuais por cena: `whoosh swoosh pop click ding success coin impact
   riser glitch typing notification` ou caminho para um arquivo.
   Ex.: `"sfx": ["riser", {"name": "coin", "at": 1.2, "volume": 0.9}]`.
-- **Master**: limitador suave + loudnorm -14 LUFS / -1.5 dBTP (padrão das redes).
+- **Efeitos próprios**: `sfx/whoosh.wav` substitui o whoosh sintetizado (vale para qualquer nome).
+- **Master**: estéreo 48 kHz, limitador suave, loudnorm em 2 passadas (-14 LUFS / -1.5 dBTP), AAC 256 kbps.
 
 ## Boas práticas de roteiro
 

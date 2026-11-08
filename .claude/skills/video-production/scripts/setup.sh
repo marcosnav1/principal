@@ -34,3 +34,9 @@ else
   warn "edge-tts sem acesso à internet: será usado gTTS/espeak (ou defina ELEVENLABS_API_KEY / PIPER_MODEL)"
 fi
 rm -rf "$TMP"
+
+echo "▶ Chaves de voz"
+[ -n "${ELEVENLABS_API_KEY:-}" ] && ok "ELEVENLABS_API_KEY definida" || warn "ELEVENLABS_API_KEY ausente (opcional, melhor qualidade)"
+[ -n "${OPENAI_API_KEY:-}" ] && ok "OPENAI_API_KEY definida" || warn "OPENAI_API_KEY ausente (opcional)"
+python3 -c "import faster_whisper" 2>/dev/null && ok "faster-whisper (legenda de narração gravada)" \
+  || warn "faster-whisper ausente: pip install faster-whisper (opcional, p/ narração gravada)"
